@@ -22,10 +22,28 @@ echo "src-git mimic https://github.com/hack3ric/mimic;openwrt" >> feeds.conf.def
 ./scripts/feeds update mimic
 ./scripts/feeds install -a -p mimic
 
+# ---- 刷新包元数据（关键）----
+# ./scripts/feeds install -a -p <feed> 之后，tmp/.config-package.in 里可能还没有
+# 刚装进来的包；紧接着的 make defconfig 会把它们当作未知符号直接丢掉，且不报错。
+# CI 上就是这个原因：momo 在时断言报 momo，拔掉 momo 后同一个位置立刻改报 mimic。
+# 删掉元数据强制 prepare-tmpinfo 全量重建。
+rm -f tmp/.packageinfo tmp/.config-package.in
+
 # ---- 断言：自定义 feed 的包必须真的被 make defconfig 保留 ----
 # 不满足就让整轮在几分钟内失败，而不是跑到产物阶段才发现包缺失
 make defconfig >/dev/null 2>&1 || { echo "FATAL: make defconfig failed" >&2; exit 1; }
 for sym in PACKAGE_mimic PACKAGE_kmod-mimic; do
-    grep -qx "CONFIG_${sym}=y" .config || { echo "FATAL: CONFIG_${sym} not selected after defconfig (feed link lost?)" >&2; exit 1; }
+    grep -qx "CONFIG_${sym}=y" .config && continue
+    pkg=${sym#PACKAGE_}
+    {
+        echo "FATAL: CONFIG_${sym} not selected after defconfig (feed link lost?)"
+        echo "--- 诊断 ---"
+        echo "元数据中 config PACKAGE_${pkg} 条目数: $(grep -c "^config PACKAGE_${pkg}\$" tmp/.config-package.in 2>/dev/null)"
+        echo "package/feeds/${pkg}: $(ls package/feeds/${pkg} 2>/dev/null | tr '\n' ' ' || echo 不存在)"
+        echo ".config 中该符号: $(grep -E "CONFIG_${sym}(=| is not set)" .config || echo 未出现)"
+        echo "相关依赖: $(grep -E "^CONFIG_PACKAGE_(libbpf|libffi|kmod-sched-core|kmod-sched-bpf)=" .config | tr '\n' ' ')"
+        echo "tmp 元数据 mtime: $(ls -l --time-style=+%H:%M:%S tmp/.packageinfo tmp/.config-package.in 2>/dev/null | awk '{print $6, $7}' | tr '\n' ' ')"
+    } >&2
+    exit 1
 done
 echo "custom package check: OK"
