@@ -10,9 +10,11 @@ sed -i "s/option lang auto/option lang zh_cn/g" feeds/luci/modules/luci-base/roo
 # 默认 argon 主题
 sed -i "s#option mediaurlbase /luci-static/bootstrap#option mediaurlbase /luci-static/argon#g" feeds/luci/modules/luci-base/root/etc/config/luci
 
-# ---- 自定义 feed：mimic 先装、momo 最后装 ----
-# 顺序有实际影响：9-14 之后 mimic 成为最后一个 feed 操作，momo 随即从 .config 消失（见 archive 记录）。
+# ---- 自定义 feed：mimic ----
 # 源追加到 feeds.conf.default 后单独 update+install（workflow 的 feeds update -a 早于本脚本执行）
+# 注：momo（nikkinikki-org/OpenWrt-momo）已于 2026-11-05 移除——feed 能正常 update/install，
+# 但 make defconfig 仍会把 momo / luci-app-momo 丢掉，断言必挂（run #2–#9 全部卡在这一步）。
+# 之前"mimic 先装、momo 最后装"的顺序调整并不能解决，说明不是 feed 安装顺序问题。
 
 # mimic feed：hack3ric/mimic（eBPF 把 UDP 伪装成 TCP；hysteria2 ≥2.12 内置集成）
 # 是否编译由 .config 的 CONFIG_PACKAGE_mimic / kmod-mimic 决定
@@ -20,15 +22,10 @@ echo "src-git mimic https://github.com/hack3ric/mimic;openwrt" >> feeds.conf.def
 ./scripts/feeds update mimic
 ./scripts/feeds install -a -p mimic
 
-# momo feed：nikkinikki OpenWrt-momo（基于 sing-box 的透明代理）
-echo "src-git momo https://github.com/nikkinikki-org/OpenWrt-momo.git;main" >> feeds.conf.default
-./scripts/feeds update momo
-./scripts/feeds install -a -p momo
-
 # ---- 断言：自定义 feed 的包必须真的被 make defconfig 保留 ----
 # 不满足就让整轮在几分钟内失败，而不是跑到产物阶段才发现包缺失
 make defconfig >/dev/null 2>&1 || { echo "FATAL: make defconfig failed" >&2; exit 1; }
-for sym in PACKAGE_momo PACKAGE_luci-app-momo PACKAGE_mimic PACKAGE_kmod-mimic; do
+for sym in PACKAGE_mimic PACKAGE_kmod-mimic; do
     grep -qx "CONFIG_${sym}=y" .config || { echo "FATAL: CONFIG_${sym} not selected after defconfig (feed link lost?)" >&2; exit 1; }
 done
 echo "custom package check: OK"
